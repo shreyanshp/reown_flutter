@@ -39,9 +39,20 @@ class AnalyticsService implements IAnalyticsService {
   Future<void> sendStoredEvents() async {
     if (_enableAnalytics == false) return;
 
-    final queryParams = CoreUtils.getApiQueryParams(_core.projectId);
-    _core.events.setQueryParams(queryParams);
-    await _core.events.sendStoredEvents();
+    // Best-effort analytics flush. The events GenericStore can be un-initialized
+    // or disposed when the modal is opened/closed quickly (throws
+    // ReownCoreError "Not initialized." from GenericStore.checkInitialized).
+    // _close() calls this fire-and-forget, so an escaping rejection becomes an
+    // unhandled PlatformDispatcher.onError crash (MOBILE-NEWS-KB). Swallow it —
+    // losing a stored-analytics flush is harmless. (logger is on _core, not the
+    // events store, so it is safe to use here.)
+    try {
+      final queryParams = CoreUtils.getApiQueryParams(_core.projectId);
+      _core.events.setQueryParams(queryParams);
+      await _core.events.sendStoredEvents();
+    } catch (e) {
+      _core.logger.e('[$runtimeType] sendStoredEvents failed (ignored): $e');
+    }
   }
 
   @override
