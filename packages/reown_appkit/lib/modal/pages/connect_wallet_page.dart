@@ -49,8 +49,19 @@ class _ConnectWalletPageState extends State<ConnectWalletPage>
         _appkitModal = ModalProvider.of(context).instance;
         _appkitModal?.onModalError.subscribe(_errorListener);
       });
-      Future.delayed(const Duration(milliseconds: 300), () {
-        _appkitModal?.connectSelectedWallet();
+      Future.delayed(const Duration(milliseconds: 300), () async {
+        if (!mounted) return;
+        // Guard the fire-and-forget connect. connectSelectedWallet() runs
+        // _checkInitialized() BEFORE its own try/catch, so if the modal is not
+        // yet initialized when this fires (postFrame + 300ms race, or it was
+        // reset/closed in the meantime) the ReownAppKitModalException escapes
+        // this un-awaited Future as an UNCAUGHT (fatal) error. Awaiting inside
+        // a try/catch contains both the synchronous _checkInitialized throw and
+        // any async rejection; genuine failures still surface to the user via
+        // onModalError -> _errorListener.
+        try {
+          await _appkitModal?.connectSelectedWallet();
+        } catch (_) {}
       });
     });
   }
