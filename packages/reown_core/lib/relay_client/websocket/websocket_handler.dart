@@ -23,6 +23,7 @@ class WebSocketHandler implements IWebSocketHandler {
 
   StreamController<String>? _inputController;
   StreamController<String>? _outputController;
+  StreamSubscription<String>? _socketSub;
 
   @override
   Future<void> setup({required String url}) async {
@@ -50,18 +51,46 @@ class WebSocketHandler implements IWebSocketHandler {
     _inputController = StreamController<String>.broadcast(sync: true);
     _outputController = StreamController<String>.broadcast(sync: true);
 
-    // Split the incoming stream to support multiple listeners
-    _socket!.stream.cast<String>().listen(
-      (data) => _inputController?.add(data),
-      onError: (error) => _inputController?.addError(error),
-      onDone: () => _inputController?.close(),
+    // Split the incoming stream to support multiple listeners.
+    // Guard every add against a closed/closing controller and keep the
+    // subscription so close() can cancel the source — otherwise a socket event
+    // arriving during/after close() hits an add-after-close and throws
+    // "Bad state: Cannot add event after closing".
+    _socketSub = _socket!.stream.cast<String>().listen(
+      (data) {
+        final c = _inputController;
+        if (c != null && !c.isClosed) c.add(data);
+      },
+      onError: (error) {
+        final c = _inputController;
+        if (c != null && !c.isClosed) c.addError(error);
+      },
+      onDone: () {
+        final c = _inputController;
+        if (c != null && !c.isClosed) c.close();
+      },
     );
 
-    // Route outgoing messages through the output controller
+    // Route outgoing messages through the output controller. The underlying
+    // socket sink is a web_socket_channel _GuaranteeSink that may already be
+    // closed when a queued message is delivered here, so add/addError/close are
+    // wrapped — an add-after-close would otherwise crash.
     _outputController!.stream.listen(
-      (data) => _socket?.sink.add(data),
-      onError: (error) => _socket?.sink.addError(error),
-      onDone: () => _socket?.sink.close(),
+      (data) {
+        try {
+          _socket?.sink.add(data);
+        } catch (_) {}
+      },
+      onError: (error) {
+        try {
+          _socket?.sink.addError(error);
+        } catch (_) {}
+      },
+      onDone: () {
+        try {
+          _socket?.sink.close();
+        } catch (_) {}
+      },
     );
 
     _channel = StreamChannel(_inputController!.stream, _outputController!.sink);
@@ -88,6 +117,13 @@ class WebSocketHandler implements IWebSocketHandler {
 
   @override
   Future<void> close() async {
+    // Cancel the socket subscription BEFORE closing controllers so no inbound
+    // event can fire an add-after-close during teardown.
+    try {
+      await _socketSub?.cancel();
+    } catch (_) {}
+    _socketSub = null;
+
     try {
       await _socket?.sink.close();
     } catch (_) {}
