@@ -31,13 +31,40 @@ class _AppKitModalQRCodePageState extends State<ReownAppKitModalQRCodePage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       _appKitModal = ModalProvider.of(context).instance;
       _appKitModal!.addListener(_buildWidget);
       _appKitModal!.appKit!.core.pairing.onPairingExpire.subscribe(
         _onPairingExpire,
       );
-      await _appKitModal!.buildConnectionUri();
+      // Guard the connection-URI build. `addPostFrameCallback` does not await
+      // this async callback, so anything thrown here escapes as an UNCAUGHT
+      // (fatal) error. buildConnectionUri() -> ReownAppKit.connect() ->
+      // ReownSign.connect() runs confirmOnlineStateOrThrow(), which throws
+      // `ReownCoreError(code: -1, message: No internet connection)` on an
+      // offline device, behind a captive portal, or where walletconnect.com is
+      // blocked. Opening the QR modal with no connectivity is an ordinary user
+      // action and must show an error, not take the app down.
+      //
+      // Observed downstream as mobile-news MOBILE-NEWS-QM.
+      await _safeBuildConnectionUri();
     });
+  }
+
+  /// Builds the pairing URI, containing any throw. Never rethrows — the caller
+  /// is an un-awaited async callback, so an escaping error is fatal.
+  Future<void> _safeBuildConnectionUri() async {
+    try {
+      await _appKitModal!.buildConnectionUri();
+    } catch (_) {
+      if (!mounted) return;
+      GetIt.I<IToastService>().show(
+        ToastMessage(
+          type: ToastType.error,
+          text: 'Connection failed. Check your network.',
+        ),
+      );
+    }
   }
 
   void _buildWidget() => setState(() {
@@ -47,8 +74,14 @@ class _AppKitModalQRCodePageState extends State<ReownAppKitModalQRCodePage> {
     );
   });
 
+  // Same exposure as initState: this is an `async void` event handler, so the
+  // future is un-awaited and a throw from buildConnectionUri() (offline /
+  // captive portal — MOBILE-NEWS-QM) would be fatal. A pairing can just as
+  // easily expire while connectivity is down as at first open. The `mounted`
+  // check also stops setState firing on a disposed State.
   void _onPairingExpire(EventArgs? args) async {
-    await _appKitModal!.buildConnectionUri();
+    await _safeBuildConnectionUri();
+    if (!mounted) return;
     setState(() {});
   }
 
