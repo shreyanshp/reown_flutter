@@ -1425,7 +1425,15 @@ class ReownAppKitModal
       return;
     }
     _isOpen = false;
-    final currentKey = _widgetStack.getCurrent().key;
+    // The page stack can already be empty here (it is cleared on the
+    // connect/disconnect teardown paths), and `getCurrent()` is `_stack.last`,
+    // so it throws `StateError: No element`. In this async-void method that
+    // escaped as an uncaught (fatal) error and skipped the rest of the close
+    // cleanup below. Same guard as ModalContainer._widgetStackUpdated.
+    Key? currentKey;
+    try {
+      currentKey = _widgetStack.getCurrent().key;
+    } catch (_) {}
     if (_disconnectOnClose) {
       _disconnectOnClose = false;
       if (currentKey == KeyConstants.approveSiwePageKey) {
